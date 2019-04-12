@@ -2,6 +2,7 @@ import datetime
 import logging
 import re
 import datetime as dt
+import html
 
 import lxml.html
 from measurement.measures import Energy, Weight, Volume
@@ -755,7 +756,6 @@ class Client(MFPBase):
         utf8_field = document.xpath(
             "(//input[@name='utf8']/@value)[1]"
         )[0]
-
         result = self.session.post(
             search_url,
             data={
@@ -776,39 +776,45 @@ class Client(MFPBase):
                 "Unable to load search results."
             )
 
-        return self._get_food_search_results(document)
+        return self._get_food_search_results(document,query)
 
-    def _get_food_search_results(self, document):
+    def _get_food_search_results(self, document,query):
         item_divs = document.xpath("//li[@class='matched-food']")
-
-        items = []
         for item_div in item_divs:
             # get mfp info from search results
             a = item_div.xpath(".//div[@class='search-title-container']/a")[0]
             mfp_id = int(a.get('data-external-id'))
+            comma_count = query.count(',')
             mfp_name = a.text
-            verif = True if item_div.xpath(
-                ".//div[@class='verified verified-list-icon']") else False
-            nutr_info = item_div.xpath(
-                ".//p[@class='search-nutritional-info']"
-            )[0].text.strip().split(',')
+            try:
+                nutr_info = item_div.xpath(
+                    ".//p[@class='search-nutritional-info']"
+                )[0].text.strip().split(',')
+            except IndexError:
+                continue
             brand = ''
             if len(nutr_info) >= 3:
                 brand = ' '.join(nutr_info[0:-2]).strip()
-            serving = nutr_info[-2].strip()
-            calories = float(nutr_info[-1].replace('calories', '').strip())
-            items.append(
-                FoodItem(
-                    mfp_id,
-                    mfp_name,
-                    brand,
-                    verif,
-                    serving,
-                    calories,
-                )
-            )
+            if comma_count>1:
+                return mfp_id
+            search_results = '{} - {}'.format(str(mfp_name).strip(),str(brand).strip())
+            query_html = str(html.escape(query)).replace("&#x27;","'").replace('&amp;','&')
+            if query_html == "American Cheese - America's Choice":
+                query_html = "Singles - American Cheese Slices - America's Choice"
+            if query_html == "Coffee With 2% Milk - Generic":
+                query_html = "Generic - Coffee Stevia & 2% Milk - "
+            if query_html == 'Ham and Swiss Cheese Panini - Starbucks':
+                query_html = 'Ham and Swiss Panini - Starbucks'
+            if query_html == 'Unsweetened Almond Milk - Califia':
+                query_html = 'Almond Milk - Califia Unsweetened'
+            if query_html == 'Extra Chicken Add-on - Sweetgreen':
+                query_html = '78g Extra Chicken Add-on - Sweetgreen'
+            if query_html == 'Red Berry - Special K':
+                query_html = 'Cereal with Red Berries - Special K'
+            
+            if query_html.upper().strip() == search_results.upper().strip():
+                return mfp_id
 
-        return items
 
     def get_food_item_details(self, mfp_id):
         # api call for food item's details
@@ -833,53 +839,4 @@ class Client(MFPBase):
                 result.status_code,
             )
         resp = result.json()['item']
-
-        # identifying serving info
-        servings = []
-        default_serving = None
-        for s in resp['serving_sizes']:
-            serving = FoodItemServing(
-                s['id'],
-                s['nutrition_multiplier'],
-                s['value'],
-                s['unit'],
-                s['index'],
-            )
-            servings.append(serving)
-            if serving.index == 0:
-                default_serving = serving.unit
-
-        # identifying calories for default serving
-        nutr_info = resp['nutritional_contents']
-        if 'energy' in nutr_info:
-            calories = nutr_info['energy']['value']
-        else:
-            calories = 0.0
-
-        # returning food item's details
-        return FoodItem(
-            mfp_id,
-            resp['description'],
-            resp.get('brand_name'),
-            resp['verified'],
-            default_serving,
-            calories,
-            calcium=nutr_info.get('calcium', 0.0),
-            carbohydrates=nutr_info.get('carbohydrates', 0.0),
-            cholesterol=nutr_info.get('cholesterol', 0.0),
-            fat=nutr_info.get('fat', 0.0),
-            fiber=nutr_info.get('fiber', 0.0),
-            iron=nutr_info.get('iron', 0.0),
-            monounsaturated_fat=nutr_info.get('monounsaturated_fat', 0.0),
-            polyunsaturated_fat=nutr_info.get('polyunsaturated_fat', 0.0),
-            potassium=nutr_info.get('potassium', 0.0),
-            protein=nutr_info.get('protein', 0.0),
-            saturated_fat=nutr_info.get('saturated_fat', 0.0),
-            sodium=nutr_info.get('sodium', 0.0),
-            sugar=nutr_info.get('sugar', 0.0),
-            trans_fat=nutr_info.get('trans_fat', 0.0),
-            vitamin_a=nutr_info.get('vitamin_a', 0.0),
-            vitamin_c=nutr_info.get('vitamin_c', 0.0),
-            confirmations=resp['confirmations'],
-            servings=servings
-        )
+        return resp
